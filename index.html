@@ -57,7 +57,8 @@
   #percentButtons { display: flex; gap: 4px; pointer-events: auto; }
   #percentButtons button {
     background: rgba(20,40,30,0.7); color: #ffcf5c; border: 1px solid #5c7364;
-    border-radius: 4px; padding: 4px 8px; font-size: 12px; cursor: pointer;
+    border-radius: 4px; padding: 10px 12px; font-size: 13px; cursor: pointer;
+    min-width: 44px; min-height: 36px;
   }
   #percentButtons button.active { background: #1c6b4d; border-color: #ffcf5c; }
   #legend {
@@ -86,7 +87,7 @@
 </div>
 
 <div id="legend">
-  ⚔ = 2x Attack &nbsp; ⬆ = 2x Growth &nbsp; | &nbsp; Drag one colony to send &nbsp; | &nbsp; Box-drag to multi-select, click target to order &nbsp; | &nbsp; Keys 1-4 = 25/50/75/100% send
+  ⚔ = 2x Attack &nbsp; ⬆ = 2x Growth &nbsp; | &nbsp; Drag one colony to send &nbsp; | &nbsp; Box-drag to multi-select, click target to order &nbsp; | &nbsp; Keys 1-4 or buttons = 25/50/75/100% send &nbsp; | &nbsp; Win a level to pick a bonus
 </div>
 
 <div id="overlay">
@@ -144,6 +145,8 @@
   let gameTime = 0;
   let lastTime = performance.now();
   let bgParticles = [];
+  let spores = [];
+  let zoomFx = null;
 
   let selected = new Set();
   let boxActive = false;
@@ -226,6 +229,19 @@
     p.shieldCharges = stats.shield;
     a.owner = OWNER.AI; a.count = Math.min(30, 10 + (level - 1) * 1.5); a.type = TYPE.NORMAL;
 
+    // higher levels give the AI extra starting colonies, not just a bigger single base
+    const extraAiBases = Math.min(2, Math.floor((level - 1) / 4));
+    if (extraAiBases > 0){
+      const candidates = balls.slice(1, balls.length - 1)
+        .sort((b1, b2) => dist(p, b2) - dist(p, b1)); // farthest from player first
+      for (let i = 0; i < extraAiBases && i < candidates.length; i++){
+        const base = candidates[i];
+        base.owner = OWNER.AI;
+        base.count = Math.min(20, 6 + (level - 1));
+        base.type = TYPE.NORMAL;
+      }
+    }
+
     document.getElementById('levelIndicator').textContent = `Level ${level}`;
     updateHUD();
   }
@@ -257,20 +273,44 @@
     if (amount < 1) return;
     source.count -= amount;
     const speed = TRAVEL_SPEED * (source.owner === OWNER.PLAYER ? (1 + stats.speed * 0.15) : 1);
+    const totalDist = dist(source, target) || 1;
     units.push({
       x: source.x, y: source.y,
+      sx: source.x, sy: source.y,
+      tx: target.x, ty: target.y,
       targetX: target.x, targetY: target.y,
       target,
       owner: source.owner,
       count: amount,
       mult: attackMult(source),
-      speed
+      speed,
+      t: 0,
+      dist: totalDist,
+      wigglePhase: Math.random() * Math.PI * 2
     });
   }
 
   function claimBall(ball, owner){
     ball.owner = owner;
     ball.shieldCharges = owner === OWNER.PLAYER ? stats.shield : 0;
+  }
+
+  function triggerCapture(ball){
+    const col = COLORS[ball.owner];
+    for (let i = 0; i < 10; i++){
+      const ang = Math.random() * Math.PI * 2;
+      const spd = 40 + Math.random() * 70;
+      spores.push({
+        x: ball.x, y: ball.y,
+        vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd,
+        age: 0, life: 0.5 + Math.random() * 0.3,
+        color: col.ring
+      });
+    }
+  }
+
+  function triggerZoomPulse(){
+    zoomFx = { age: 0, duration: 0.7 };
   }
 
   function resolveArrival(u){
@@ -288,9 +328,10 @@
       power *= Math.max(0.25, 1 - stats.defence * 0.12);
     }
     target.count -= power;
-    if (target.count < 0){
+    if (target.count <= 0){
       claimBall(target, u.owner);
       target.count = Math.max(1, Math.round(-target.count));
+      triggerCapture(target);
     } else {
       if (target.owner === OWNER.PLAYER && stats.regen > 0){
         target.count += power * Math.min(0.8, stats.regen * 0.15);
@@ -344,6 +385,7 @@
 
   function endGame(won){
     gameOver = true;
+    triggerZoomPulse();
     if (won){
       showBonusPicker();
       return;
@@ -399,6 +441,19 @@
   }
 
   function update(dt){
+    for (let i = spores.length - 1; i >= 0; i--){
+      const s = spores[i];
+      s.age += dt;
+      if (s.age >= s.life){ spores.splice(i, 1); continue; }
+      s.x += s.vx * dt; s.y += s.vy * dt;
+      s.vx *= 0.9; s.vy *= 0.9;
+    }
+
+    if (zoomFx){
+      zoomFx.age += dt;
+      if (zoomFx.age >= zoomFx.duration) zoomFx = null;
+    }
+
     if (gameOver) return;
 
     gameTime += dt;
@@ -442,15 +497,14 @@
 
     for (let i = units.length - 1; i >= 0; i--){
       const u = units[i];
-      const dx = u.targetX - u.x, dy = u.targetY - u.y;
-      const d = Math.hypot(dx, dy);
-      const step = u.speed * dt;
-      if (step >= d){
+      u.t += (u.speed * dt) / u.dist;
+      if (u.t >= 1){
+        u.x = u.tx; u.y = u.ty;
         resolveArrival(u);
         units.splice(i, 1);
       } else {
-        u.x += (dx / d) * step;
-        u.y += (dy / d) * step;
+        u.x = u.sx + (u.tx - u.sx) * u.t;
+        u.y = u.sy + (u.ty - u.sy) * u.t;
       }
     }
 
@@ -515,6 +569,26 @@
       ctx.lineWidth = 2;
       ctx.stroke();
     }
+
+    drawShield(b);
+  }
+
+  function drawShield(b){
+    if (b.owner !== OWNER.PLAYER || b.shieldCharges <= 0 || stats.shield <= 0) return;
+    const segAngle = (Math.PI * 2) / stats.shield;
+    const ringR = b.r + 9;
+    for (let i = 0; i < b.shieldCharges; i++){
+      const start = -Math.PI / 2 + i * segAngle + 0.06;
+      const end = start + segAngle - 0.12;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, ringR, start, end);
+      ctx.strokeStyle = '#8fffe0';
+      ctx.lineWidth = 3;
+      ctx.shadowColor = '#8fffe0';
+      ctx.shadowBlur = 6;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    }
   }
 
   function drawFace(b){
@@ -571,18 +645,110 @@
 
   function drawUnit(u){
     const c = COLORS[u.owner];
-    ctx.beginPath();
-    ctx.arc(u.x, u.y, 7, 0, Math.PI * 2);
-    ctx.fillStyle = c.fill;
-    ctx.strokeStyle = c.ring;
-    ctx.lineWidth = 2;
-    ctx.fill();
-    ctx.stroke();
+    const dx = u.tx - u.sx, dy = u.ty - u.sy;
+    const len = Math.hypot(dx, dy) || 1;
+    const dirx = dx / len, diry = dy / len;
+    const perpx = -diry, perpy = dirx;
+
+    const envelope = Math.sin(Math.min(1, u.t) * Math.PI); // no wiggle right at spawn/arrival
+    const wiggle = Math.sin(gameTime * 7 + u.wigglePhase) * 5 * envelope;
+    const rx = u.x + perpx * wiggle;
+    const ry = u.y + perpy * wiggle;
+
+    const pulse = 1 + 0.12 * Math.sin(gameTime * 9 + u.wigglePhase);
+    const bodyLen = 8 * pulse;
+    const bodyWid = 5 * pulse;
+    const isPlayer = u.owner === OWNER.PLAYER;
+
+    ctx.save();
+    ctx.translate(rx, ry);
+
+    if (isPlayer){
+      // PROBIOTIC: smooth friendly rod capsule, soft cilia, googly eyes
+      ctx.rotate(Math.atan2(diry, dirx));
+
+      ctx.beginPath();
+      ctx.moveTo(-bodyLen, -bodyWid);
+      ctx.lineTo(bodyLen, -bodyWid);
+      ctx.arc(bodyLen, 0, bodyWid, -Math.PI / 2, Math.PI / 2);
+      ctx.lineTo(-bodyLen, bodyWid);
+      ctx.arc(-bodyLen, 0, bodyWid, Math.PI / 2, -Math.PI / 2);
+      ctx.closePath();
+      ctx.fillStyle = c.fill;
+      ctx.fill();
+      ctx.strokeStyle = c.ring;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      for (let i = 0; i < 5; i++){
+        const t = i / 4;
+        const hx = -bodyLen + t * bodyLen * 2;
+        const side = i % 2 === 0 ? 1 : -1;
+        const hairWave = Math.sin(gameTime * 12 + u.wigglePhase + i) * 1.2;
+        ctx.beginPath();
+        ctx.moveTo(hx, side * bodyWid);
+        ctx.lineTo(hx + hairWave * 0.4, side * (bodyWid + bodyWid));
+        ctx.strokeStyle = c.ring;
+        ctx.lineWidth = 1;
+        ctx.globalAlpha = 0.6;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+
+      const eyeR = bodyWid * 0.4;
+      for (const side of [-1, 1]){
+        ctx.beginPath();
+        ctx.arc(bodyLen * 0.35, side * bodyWid * 0.35, eyeR, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(bodyLen * 0.35 + eyeR * 0.3, side * bodyWid * 0.35, eyeR * 0.5, 0, Math.PI * 2);
+        ctx.fillStyle = '#101418';
+        ctx.fill();
+      }
+    } else {
+      // PATHOGEN: round spiky virus-like cell, spikes spin independently, angry eyes
+      const coreR = bodyLen * 0.75;
+      const spikeCount = 9;
+      ctx.beginPath();
+      for (let i = 0; i < spikeCount; i++){
+        const ang = (i / spikeCount) * Math.PI * 2 + gameTime * 1.2 + u.wigglePhase;
+        const wobble = Math.sin(gameTime * 10 + u.wigglePhase + i) * 0.15;
+        const spikeLen = coreR * (1.7 + wobble);
+        const baseA = ang - 0.14, baseB = ang + 0.14;
+        ctx.moveTo(Math.cos(baseA) * coreR * 0.9, Math.sin(baseA) * coreR * 0.9);
+        ctx.lineTo(Math.cos(ang) * spikeLen, Math.sin(ang) * spikeLen);
+        ctx.lineTo(Math.cos(baseB) * coreR * 0.9, Math.sin(baseB) * coreR * 0.9);
+      }
+      ctx.closePath();
+      ctx.fillStyle = c.ring;
+      ctx.globalAlpha = 0.85;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+
+      ctx.beginPath();
+      ctx.arc(0, 0, coreR, 0, Math.PI * 2);
+      ctx.fillStyle = c.fill;
+      ctx.fill();
+      ctx.strokeStyle = c.ring;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      ctx.strokeStyle = '#1a0508';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(-coreR * 0.35, -coreR * 0.15); ctx.lineTo(-coreR * 0.05, -coreR * 0.35);
+      ctx.moveTo(coreR * 0.05, -coreR * 0.35); ctx.lineTo(coreR * 0.35, -coreR * 0.15);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+
     ctx.fillStyle = c.text;
     ctx.font = '9px Segoe UI';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(u.count, u.x, u.y);
+    ctx.fillText(u.count, rx, ry);
   }
 
   function drawBackground(){
@@ -612,6 +778,16 @@
 
   function draw(){
     ctx.clearRect(0, 0, W, H);
+
+    ctx.save();
+    if (zoomFx){
+      const p = Math.min(1, zoomFx.age / zoomFx.duration);
+      const scale = 1 + 0.12 * Math.sin(p * Math.PI); // quick punch in and back out
+      ctx.translate(W / 2, H / 2);
+      ctx.scale(scale, scale);
+      ctx.translate(-W / 2, -H / 2);
+    }
+
     drawBackground();
 
     if (dragSource && dragPos){
@@ -666,6 +842,18 @@
     }
 
     for (const u of units) drawUnit(u);
+
+    for (const s of spores){
+      const alpha = 1 - s.age / s.life;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 2.5 * alpha + 0.5, 0, Math.PI * 2);
+      ctx.fillStyle = s.color;
+      ctx.globalAlpha = alpha;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    ctx.restore();
   }
 
   function loop(now){
