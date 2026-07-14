@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Bacteria World</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; overflow: hidden;
+    background: radial-gradient(circle at center, #0c1f16 0%, #030a06 100%);
+    font-family: 'Segoe UI', Tahoma, sans-serif;
+    color: #d7ffe8;
+    height: 100%;
+  }
+  #hud {
+    position: fixed; top: 0; left: 0; right: 0;
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 20px; box-sizing: border-box;
+    background: linear-gradient(to bottom, rgba(0,0,0,0.6), transparent);
+    pointer-events: none; z-index: 5;
+  }
+  #hud .title { font-size: 18px; font-weight: bold; letter-spacing: 1px; color: #7fffb0; text-shadow: 0 0 8px rgba(127,255,176,0.6); }
+  #hud .score { font-size: 14px; display: flex; gap: 18px; }
+  #hud .score span.player { color: #34e5c9; }
+  #hud .score span.ai { color: #ff5a7a; }
+  #overlay {
+    position: fixed; inset: 0; display: none;
+    align-items: center; justify-content: center; flex-direction: column;
+    background: rgba(3,10,6,0.88); z-index: 10;
+  }
+  #overlay h1 { font-size: 42px; margin-bottom: 6px; }
+  #overlay p { color: #9fd9bd; margin-bottom: 20px; }
+  #overlay button {
+    background: #1c6b4d; color: #eafff2; border: none; padding: 12px 28px;
+    font-size: 16px; border-radius: 6px; cursor: pointer; letter-spacing: 0.5px;
+  }
+  #overlay button:hover { background: #268a63; }
+  #bonusOverlay {
+    position: fixed; inset: 0; display: none;
+    align-items: center; justify-content: center; flex-direction: column;
+    background: rgba(3,10,6,0.92); z-index: 10;
+  }
+  #bonusOverlay h1 { font-size: 32px; margin-bottom: 4px; color: #7fffb0; }
+  #bonusOverlay p { color: #9fd9bd; margin-bottom: 24px; }
+  #bonusCards { display: flex; gap: 20px; }
+  .bonusCard {
+    width: 160px; padding: 18px 14px; border: 2px solid #5c7364; border-radius: 10px;
+    background: rgba(20,40,30,0.7); text-align: center; cursor: pointer;
+    transition: transform 0.12s, background 0.12s;
+  }
+  .bonusCard:hover { transform: translateY(-4px); background: rgba(30,60,45,0.85); }
+  .bonusIcon { font-size: 32px; margin-bottom: 8px; }
+  .bonusName { font-weight: bold; font-size: 15px; margin-bottom: 6px; color: #eafff5; }
+  .bonusDesc { font-size: 12px; color: #9fd9bd; margin-bottom: 8px; line-height: 1.4; }
+  .bonusLevel { font-size: 11px; color: #ffcf5c; }
+  canvas { display: block; cursor: crosshair; touch-action: none; }
+  #percentButtons { display: flex; gap: 4px; pointer-events: auto; }
+  #percentButtons button {
+    background: rgba(20,40,30,0.7); color: #ffcf5c; border: 1px solid #5c7364;
+    border-radius: 4px; padding: 4px 8px; font-size: 12px; cursor: pointer;
+  }
+  #percentButtons button.active { background: #1c6b4d; border-color: #ffcf5c; }
+  #legend {
+    position: fixed; bottom: 10px; left: 12px; font-size: 11px; color: #8fc9ab;
+    line-height: 1.6; pointer-events: none; z-index: 5;
+  }
+  #legend span { padding: 2px 6px; border-radius: 3px; margin-right: 6px; }
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <div class="title">🦠 BACTERIA WORLD</div>
+  <div class="score">
+    <span id="levelIndicator" style="color:#7fffb0;">Level 1</span>
+    <span id="percentIndicator" style="color:#ffcf5c;">Send: 50%</span>
+    <div id="percentButtons">
+      <button data-pct="0.25">25%</button>
+      <button data-pct="0.5" class="active">50%</button>
+      <button data-pct="0.75">75%</button>
+      <button data-pct="1" >100%</button>
+    </div>
+    <span class="player" id="playerScore">Probiotic: 0</span>
+    <span class="ai" id="aiScore">Pathogen: 0</span>
+  </div>
+</div>
+
+<div id="legend">
+  ⚔ = 2x Attack &nbsp; ⬆ = 2x Growth &nbsp; | &nbsp; Drag one colony to send &nbsp; | &nbsp; Box-drag to multi-select, click target to order &nbsp; | &nbsp; Keys 1-4 = 25/50/75/100% send
+</div>
+
+<div id="overlay">
+  <h1 id="overlayTitle">You Win!</h1>
+  <p id="overlaySub">Your strain has colonized the entire host.</p>
+  <button id="restartBtn">Restart</button>
+</div>
+
+<div id="bonusOverlay">
+  <h1>Level Complete!</h1>
+  <p>Pick a bonus to power up your strain</p>
+  <div id="bonusCards"></div>
+</div>
+
+<canvas id="game"></canvas>
+
+<script>
+(function(){
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  let W, H;
+  function resize(){
+    const oldW = W, oldH = H;
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+    if (oldW && oldH && typeof balls !== 'undefined'){
+      const sx = W / oldW, sy = H / oldH;
+      for (const b of balls){ b.x *= sx; b.y *= sy; }
+      for (const p of bgParticles){ p.x *= sx; p.y *= sy; }
+    }
+  }
+  window.addEventListener('resize', resize);
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+
+  const OWNER = { NEUTRAL: 'neutral', PLAYER: 'player', AI: 'ai' };
+  const TYPE = { NORMAL: 'normal', ATTACK: 'attack', GROWTH: 'growth' };
+  const COLORS = {
+    neutral: { fill: '#3a4a40', ring: '#5c7364', text: '#cfe8da' },
+    player:  { fill: '#0f8f74', ring: '#34e5c9', text: '#eafff5' },
+    ai:      { fill: '#8f1f3f', ring: '#ff5a7a', text: '#ffe6ec' }
+  };
+  const BASE_GROWTH = 0.55;   // count per second
+  const TRAVEL_SPEED = 90;    // px per second
+  const AI_THINK_INTERVAL = 3.2;
+  const AI_GRACE_PERIOD = 25; // seconds of peace before the germs wake up
+  const AI_RAMP_TIME = 150;   // seconds to reach full aggression
+
+  let balls = [];
+  let units = [];
+  let dragSource = null;
+  let dragPos = null;
+  let gameOver = false;
+  let aiTimer = 0;
+  let gameTime = 0;
+  let lastTime = performance.now();
+  let bgParticles = [];
+
+  let selected = new Set();
+  let boxActive = false;
+  let boxStart = null;
+  let boxEnd = null;
+  let sendPercent = 0.5;
+
+  const BONUS_DEFS = {
+    strength: { name: 'Strength',  icon: '⚔',  desc: 'Colonies hit harder when attacking', color: '#ffcf5c' },
+    growth:   { name: 'Growth',    icon: '⬆',  desc: 'Colonies grow population faster',    color: '#7fffb0' },
+    speed:    { name: 'Speed',     icon: '💨', desc: 'Sent units travel faster',            color: '#5cd0ff' },
+    defence:  { name: 'Defence',   icon: '🛡',  desc: 'Take less damage from attacks',       color: '#c792ff' },
+    regen:    { name: 'Regen',     icon: '❤',  desc: 'Heal back some losses after a hit',   color: '#ff8fa3' },
+    magnet:   { name: 'Magnetism', icon: '🧲', desc: 'Passively drain nearby neutrals',      color: '#ffb15c' },
+    shield:   { name: 'Shield',    icon: '🔰', desc: 'Block the first hit each level free',  color: '#8fffe0' },
+    vision:   { name: 'Vision',    icon: '👁',  desc: 'See enemy attacks coming',             color: '#ffe66d' }
+  };
+
+  let level = 1;
+  let stats = { strength: 0, growth: 0, speed: 0, defence: 0, regen: 0, magnet: 0, shield: 0, vision: 0 };
+
+  function dist(a, b){ return Math.hypot(a.x - b.x, a.y - b.y); }
+
+  function makeBall(x, y, r, owner, count, type){
+    return { x, y, r, owner, count, type, wobble: Math.random() * Math.PI * 2, shieldCharges: 0 };
+  }
+
+  function initBackground(){
+    bgParticles = [];
+    const n = Math.floor((W * H) / 22000);
+    for (let i = 0; i < n; i++){
+      bgParticles.push({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        r: 1 + Math.random() * 2.5,
+        vx: (Math.random() - 0.5) * 8,
+        vy: (Math.random() - 0.5) * 8,
+        a: 0.08 + Math.random() * 0.14
+      });
+    }
+  }
+
+  function generateLevel(){
+    balls = [];
+    units = [];
+    gameOver = false;
+    gameTime = 0;
+    document.getElementById('overlay').style.display = 'none';
+    initBackground();
+
+    const margin = 90;
+    const count = Math.min(22, 5 + (level - 1) * 2); // 5 balls at level 1, grows from there
+
+    let attempts = 0;
+    while (balls.length < count && attempts < 2000){
+      attempts++;
+      const r = 22 + Math.random() * 14;
+      const x = margin + Math.random() * (W - margin * 2);
+      const y = margin + 60 + Math.random() * (H - margin * 2 - 60);
+      let ok = true;
+      for (const b of balls){
+        if (dist({x,y}, b) < b.r + r + 46){ ok = false; break; }
+      }
+      if (!ok) continue;
+
+      let type = TYPE.NORMAL;
+      const roll = Math.random();
+      if (roll < 0.18) type = TYPE.ATTACK;
+      else if (roll < 0.36) type = TYPE.GROWTH;
+
+      const ball = makeBall(x, y, r, OWNER.NEUTRAL, 3 + Math.floor(Math.random() * 10), type);
+      balls.push(ball);
+    }
+
+    // assign start bases far apart
+    balls.sort((a, b) => a.x - b.x);
+    const p = balls[0];
+    const a = balls[balls.length - 1];
+    p.owner = OWNER.PLAYER; p.count = 14; p.type = TYPE.NORMAL;
+    p.shieldCharges = stats.shield;
+    a.owner = OWNER.AI; a.count = Math.min(30, 10 + (level - 1) * 1.5); a.type = TYPE.NORMAL;
+
+    document.getElementById('levelIndicator').textContent = `Level ${level}`;
+    updateHUD();
+  }
+
+  function currentGrace(){ return Math.max(6, AI_GRACE_PERIOD - (level - 1) * 3); }
+  function currentRampTime(){ return Math.max(50, AI_RAMP_TIME - (level - 1) * 12); }
+
+  function growthRate(ball){
+    let rate = BASE_GROWTH;
+    if (ball.type === TYPE.GROWTH) rate *= 2;
+    if (ball.owner === OWNER.PLAYER) rate *= (1 + stats.growth * 0.12);
+    return rate;
+  }
+
+  function ballCapacity(ball){
+    return ball.r * 2.6; // bigger colony site, bigger population ceiling
+  }
+
+  function attackMult(ball){
+    let mult = ball.type === TYPE.ATTACK ? 2 : 1;
+    if (ball.owner === OWNER.PLAYER) mult *= (1 + stats.strength * 0.15);
+    return mult;
+  }
+
+  function sendUnits(source, target, percent){
+    if (!source || !target || source === target) return;
+    if (source.owner === OWNER.NEUTRAL) return;
+    const amount = Math.floor(source.count * (percent !== undefined ? percent : sendPercent));
+    if (amount < 1) return;
+    source.count -= amount;
+    const speed = TRAVEL_SPEED * (source.owner === OWNER.PLAYER ? (1 + stats.speed * 0.15) : 1);
+    units.push({
+      x: source.x, y: source.y,
+      targetX: target.x, targetY: target.y,
+      target,
+      owner: source.owner,
+      count: amount,
+      mult: attackMult(source),
+      speed
+    });
+  }
+
+  function claimBall(ball, owner){
+    ball.owner = owner;
+    ball.shieldCharges = owner === OWNER.PLAYER ? stats.shield : 0;
+  }
+
+  function resolveArrival(u){
+    const target = u.target;
+    if (target.owner === u.owner){
+      target.count += u.count;
+      return;
+    }
+    if (target.owner === OWNER.PLAYER && target.shieldCharges > 0){
+      target.shieldCharges--; // fully absorbed, no damage
+      return;
+    }
+    let power = u.count * u.mult;
+    if (target.owner === OWNER.PLAYER){
+      power *= Math.max(0.25, 1 - stats.defence * 0.12);
+    }
+    target.count -= power;
+    if (target.count < 0){
+      claimBall(target, u.owner);
+      target.count = Math.max(1, Math.round(-target.count));
+    } else {
+      if (target.owner === OWNER.PLAYER && stats.regen > 0){
+        target.count += power * Math.min(0.8, stats.regen * 0.15);
+      }
+      target.count = Math.round(target.count);
+    }
+  }
+
+  function aiTurn(){
+    const grace = currentGrace();
+    if (gameTime < grace) return; // germs still waking up
+
+    const ramp = Math.min(1, (gameTime - grace) / currentRampTime());
+    const actChance = 0.14 + ramp * 0.22;       // 0.14 -> 0.36 over the ramp
+    const minCount = 12 - ramp * 4;             // 12 -> 8, needs a bigger army early on
+    const attackMargin = 2.2 - ramp * 0.7;      // 2.2x -> 1.5x target strength required
+
+    const mine = balls.filter(b => b.owner === OWNER.AI && b.count >= minCount);
+    if (mine.length === 0) return;
+    for (const src of mine){
+      if (Math.random() > actChance) continue; // most colonies sit still each cycle
+      const targets = balls.filter(b => b !== src && b.owner !== OWNER.AI);
+      if (targets.length === 0) continue;
+      targets.sort((t1, t2) => {
+        const penalty1 = t1.owner === OWNER.NEUTRAL ? 0 : 25;
+        const penalty2 = t2.owner === OWNER.NEUTRAL ? 0 : 25;
+        const score1 = t1.count + dist(src, t1) * 0.05 + penalty1;
+        const score2 = t2.count + dist(src, t2) * 0.05 + penalty2;
+        return score1 - score2;
+      });
+      const target = targets[0];
+      const safeMargin = target.owner === OWNER.NEUTRAL ? target.count + 2 : target.count * attackMargin + 4;
+      if (src.count >= safeMargin){
+        sendUnits(src, target, 0.6);
+      }
+    }
+  }
+
+  function checkWinLoss(){
+    const playerBalls = balls.filter(b => b.owner === OWNER.PLAYER);
+    const aiBalls = balls.filter(b => b.owner === OWNER.AI);
+    const playerUnitsInFlight = units.some(u => u.owner === OWNER.PLAYER);
+    const aiUnitsInFlight = units.some(u => u.owner === OWNER.AI);
+
+    if (playerBalls.length === 0 && !playerUnitsInFlight){
+      endGame(false);
+    } else if (aiBalls.length === 0 && !aiUnitsInFlight){
+      endGame(true);
+    }
+  }
+
+  function endGame(won){
+    gameOver = true;
+    if (won){
+      showBonusPicker();
+      return;
+    }
+    const overlay = document.getElementById('overlay');
+    document.getElementById('overlayTitle').textContent = 'You Lose';
+    document.getElementById('overlayTitle').style.color = '#ff5a7a';
+    document.getElementById('overlaySub').textContent =
+      `The pathogen strain overran the host on level ${level}.`;
+    overlay.style.display = 'flex';
+  }
+
+  function pickThreeBonuses(){
+    const keys = Object.keys(BONUS_DEFS);
+    for (let i = keys.length - 1; i > 0; i--){
+      const j = Math.floor(Math.random() * (i + 1));
+      [keys[i], keys[j]] = [keys[j], keys[i]];
+    }
+    return keys.slice(0, 3);
+  }
+
+  function showBonusPicker(){
+    const picks = pickThreeBonuses();
+    const container = document.getElementById('bonusCards');
+    container.innerHTML = '';
+    for (const key of picks){
+      const def = BONUS_DEFS[key];
+      const card = document.createElement('div');
+      card.className = 'bonusCard';
+      card.style.borderColor = def.color;
+      card.innerHTML = `<div class="bonusIcon" style="color:${def.color}">${def.icon}</div>
+        <div class="bonusName">${def.name}</div>
+        <div class="bonusDesc">${def.desc}</div>
+        <div class="bonusLevel">Lv ${stats[key]} &rarr; ${stats[key] + 1}</div>`;
+      card.addEventListener('click', () => {
+        stats[key]++;
+        document.getElementById('bonusOverlay').style.display = 'none';
+        level++;
+        generateLevel();
+      });
+      container.appendChild(card);
+    }
+    document.getElementById('bonusOverlay').style.display = 'flex';
+  }
+
+  function updateHUD(){
+    const playerTotal = balls.filter(b=>b.owner===OWNER.PLAYER).reduce((s,b)=>s+b.count,0)
+      + units.filter(u=>u.owner===OWNER.PLAYER).reduce((s,u)=>s+u.count,0);
+    const aiTotal = balls.filter(b=>b.owner===OWNER.AI).reduce((s,b)=>s+b.count,0)
+      + units.filter(u=>u.owner===OWNER.AI).reduce((s,u)=>s+u.count,0);
+    document.getElementById('playerScore').textContent = `Probiotic: ${Math.round(playerTotal)}`;
+    document.getElementById('aiScore').textContent = `Pathogen: ${Math.round(aiTotal)}`;
+  }
+
+  function update(dt){
+    if (gameOver) return;
+
+    gameTime += dt;
+
+    for (const p of bgParticles){
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      if (p.x < 0) p.x += W; if (p.x > W) p.x -= W;
+      if (p.y < 0) p.y += H; if (p.y > H) p.y -= H;
+    }
+
+    for (const b of balls){
+      b.wobble += dt * 1.6;
+      if (b.owner !== OWNER.NEUTRAL){
+        const cap = ballCapacity(b);
+        if (b.count < cap){
+          const room = 1 - b.count / cap; // growth tapers off near capacity
+          b.count += growthRate(b) * dt * room;
+          if (b.count > cap) b.count = cap;
+        }
+      }
+    }
+
+    if (stats.magnet > 0){
+      const playerBalls = balls.filter(b => b.owner === OWNER.PLAYER);
+      for (const n of balls){
+        if (n.owner !== OWNER.NEUTRAL) continue;
+        // only the single nearest player colony in range drains it - no stacking bonus for owning many colonies
+        let inRange = false;
+        for (const src of playerBalls){
+          const range = src.r * (2.2 + stats.magnet * 0.6);
+          if (dist(src, n) <= range){ inRange = true; break; }
+        }
+        if (!inRange) continue;
+        n.count -= stats.magnet * 0.18 * dt;
+        if (n.count <= 0){
+          claimBall(n, OWNER.PLAYER);
+          n.count = 1;
+        }
+      }
+    }
+
+    for (let i = units.length - 1; i >= 0; i--){
+      const u = units[i];
+      const dx = u.targetX - u.x, dy = u.targetY - u.y;
+      const d = Math.hypot(dx, dy);
+      const step = u.speed * dt;
+      if (step >= d){
+        resolveArrival(u);
+        units.splice(i, 1);
+      } else {
+        u.x += (dx / d) * step;
+        u.y += (dy / d) * step;
+      }
+    }
+
+    aiTimer += dt;
+    if (aiTimer >= AI_THINK_INTERVAL){
+      aiTimer = 0;
+      aiTurn();
+    }
+
+    updateHUD();
+    checkWinLoss();
+  }
+
+  function drawBall(b){
+    const c = COLORS[b.owner];
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.fillStyle = c.fill;
+    ctx.fill();
+    ctx.lineWidth = b.owner === OWNER.NEUTRAL ? 1.5 : 3;
+    ctx.strokeStyle = c.ring;
+    ctx.shadowColor = c.ring;
+    ctx.shadowBlur = b.owner === OWNER.NEUTRAL ? 0 : 12;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // membrane texture blobs
+    ctx.save();
+    ctx.clip();
+    ctx.globalAlpha = 0.15;
+    ctx.fillStyle = '#ffffff';
+    for (let i=0;i<3;i++){
+      ctx.beginPath();
+      ctx.arc(b.x + Math.sin(i*2+b.x)*b.r*0.4, b.y + Math.cos(i*3+b.y)*b.r*0.4, b.r*0.25, 0, Math.PI*2);
+      ctx.fill();
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
+
+    drawFace(b);
+
+    ctx.fillStyle = c.text;
+    ctx.font = 'bold 13px Segoe UI';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(Math.floor(b.count), b.x, b.y + b.r * 0.55);
+
+    if (b.type === TYPE.ATTACK){
+      ctx.font = '12px Segoe UI';
+      ctx.fillStyle = '#ffcf5c';
+      ctx.fillText('⚔', b.x + b.r - 4, b.y - b.r + 4);
+    } else if (b.type === TYPE.GROWTH){
+      ctx.font = '12px Segoe UI';
+      ctx.fillStyle = '#7fffb0';
+      ctx.fillText('⬆', b.x + b.r - 4, b.y - b.r + 4);
+    }
+
+    if (b === dragSource || selected.has(b)){
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r + 6, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+  }
+
+  function drawFace(b){
+    const eyeY = b.y - b.r * 0.15;
+    const eyeSpread = b.r * 0.34;
+    const eyeR = Math.max(2, b.r * 0.16);
+    const bob = Math.sin(b.wobble) * b.r * 0.03;
+
+    if (b.owner === OWNER.NEUTRAL){
+      // dormant: sleepy closed eyes + little "z"
+      ctx.strokeStyle = 'rgba(207,232,218,0.6)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(b.x - eyeSpread - eyeR, eyeY);
+      ctx.lineTo(b.x - eyeSpread + eyeR, eyeY);
+      ctx.moveTo(b.x + eyeSpread - eyeR, eyeY);
+      ctx.lineTo(b.x + eyeSpread + eyeR, eyeY);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(207,232,218,0.5)';
+      ctx.font = `${Math.max(9, b.r*0.35)}px Segoe UI`;
+      ctx.textAlign = 'left';
+      ctx.fillText('z', b.x + b.r * 0.4, b.y - b.r * 0.5);
+      return;
+    }
+
+    for (const side of [-1, 1]){
+      const ex = b.x + side * eyeSpread;
+      const ey = eyeY + bob;
+      ctx.beginPath();
+      ctx.arc(ex, ey, eyeR, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(ex + side * eyeR * 0.25, ey + eyeR * 0.2, eyeR * 0.5, 0, Math.PI * 2);
+      ctx.fillStyle = '#101418';
+      ctx.fill();
+    }
+
+    // mouth: player grins, ai snarls
+    ctx.beginPath();
+    const mouthY = b.y + b.r * 0.28 + bob;
+    if (b.owner === OWNER.PLAYER){
+      ctx.arc(b.x, mouthY - b.r * 0.15, b.r * 0.32, 0.15 * Math.PI, 0.85 * Math.PI);
+    } else {
+      ctx.moveTo(b.x - b.r * 0.28, mouthY);
+      ctx.lineTo(b.x - b.r * 0.1, mouthY - b.r * 0.12);
+      ctx.lineTo(b.x + b.r * 0.1, mouthY);
+      ctx.lineTo(b.x + b.r * 0.28, mouthY - b.r * 0.12);
+    }
+    ctx.strokeStyle = COLORS[b.owner].text;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
+  function drawUnit(u){
+    const c = COLORS[u.owner];
+    ctx.beginPath();
+    ctx.arc(u.x, u.y, 7, 0, Math.PI * 2);
+    ctx.fillStyle = c.fill;
+    ctx.strokeStyle = c.ring;
+    ctx.lineWidth = 2;
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = c.text;
+    ctx.font = '9px Segoe UI';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(u.count, u.x, u.y);
+  }
+
+  function drawBackground(){
+    const pulse = 0.5 + 0.5 * Math.sin(gameTime * 0.3);
+    const grad = ctx.createRadialGradient(W/2, H/2, 0, W/2, H/2, Math.max(W,H)*0.75);
+    grad.addColorStop(0, `rgba(20, ${60 + pulse*20}, 45, 1)`);
+    grad.addColorStop(1, '#040a06');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+
+    for (const p of bgParticles){
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(150,255,200,${p.a})`;
+      ctx.fill();
+    }
+
+    ctx.strokeStyle = 'rgba(127,255,176,0.03)';
+    ctx.lineWidth = 1;
+    for (let x = 0; x < W; x += 40){
+      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
+    }
+    for (let y = 0; y < H; y += 40){
+      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
+    }
+  }
+
+  function draw(){
+    ctx.clearRect(0, 0, W, H);
+    drawBackground();
+
+    if (dragSource && dragPos){
+      ctx.beginPath();
+      ctx.moveTo(dragSource.x, dragSource.y);
+      ctx.lineTo(dragPos.x, dragPos.y);
+      ctx.strokeStyle = 'rgba(52,229,201,0.6)';
+      ctx.setLineDash([6, 6]);
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    if (boxActive && boxStart && boxEnd){
+      const rect = normalizeRect(boxStart, boxEnd);
+      ctx.fillStyle = 'rgba(52,229,201,0.12)';
+      ctx.strokeStyle = 'rgba(52,229,201,0.7)';
+      ctx.lineWidth = 1.5;
+      ctx.fillRect(rect.x1, rect.y1, rect.x2 - rect.x1, rect.y2 - rect.y1);
+      ctx.strokeRect(rect.x1, rect.y1, rect.x2 - rect.x1, rect.y2 - rect.y1);
+    }
+
+    for (const b of balls) drawBall(b);
+
+    if (stats.vision >= 1){
+      const pulse = 0.5 + 0.5 * Math.sin(gameTime * 6);
+      for (const u of units){
+        if (u.owner !== OWNER.AI) continue;
+        const t = u.target;
+        ctx.beginPath();
+        ctx.moveTo(u.x, u.y);
+        ctx.lineTo(t.x, t.y);
+        ctx.strokeStyle = `rgba(255,90,90,${0.25 + 0.25 * pulse})`;
+        ctx.setLineDash([4, 4]);
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.beginPath();
+        ctx.arc(t.x, t.y, t.r + 8 + pulse * 3, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(255,90,90,${0.35 + 0.35 * pulse})`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        if (stats.vision >= 2){
+          ctx.fillStyle = '#ffb3b3';
+          ctx.font = 'bold 10px Segoe UI';
+          ctx.textAlign = 'center';
+          ctx.fillText(`⚠ ${u.count}`, t.x, t.y - t.r - 14);
+        }
+      }
+    }
+
+    for (const u of units) drawUnit(u);
+  }
+
+  function loop(now){
+    const dt = Math.min(0.05, (now - lastTime) / 1000);
+    lastTime = now;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  function ballAt(x, y){
+    for (const b of balls){
+      if (dist({x,y}, b) <= b.r + 4) return b;
+    }
+    return null;
+  }
+
+  function normalizeRect(a, b){
+    return {
+      x1: Math.min(a.x, b.x), y1: Math.min(a.y, b.y),
+      x2: Math.max(a.x, b.x), y2: Math.max(a.y, b.y)
+    };
+  }
+  function rectContains(rect, b){
+    return b.x >= rect.x1 && b.x <= rect.x2 && b.y >= rect.y1 && b.y <= rect.y2;
+  }
+
+  let boxDownBall = null;
+
+  function pointerDown(x, y){
+    if (gameOver) return;
+    const b = ballAt(x, y);
+    if (b && b.owner === OWNER.PLAYER && selected.size === 0){
+      // quick single-colony drag-to-send
+      dragSource = b;
+      dragPos = { x, y };
+    } else {
+      boxActive = true;
+      boxStart = { x, y };
+      boxEnd = { x, y };
+      boxDownBall = b; // ball (any owner) under the initial click, if any
+    }
+  }
+  function pointerMove(x, y){
+    if (dragSource) dragPos = { x, y };
+    else if (boxActive) boxEnd = { x, y };
+  }
+  function pointerUp(x, y){
+    if (dragSource){
+      const target = ballAt(x, y);
+      if (target && target !== dragSource) sendUnits(dragSource, target);
+      dragSource = null;
+      dragPos = null;
+      return;
+    }
+    if (boxActive){
+      if (boxDownBall){
+        // mousedown started directly on a ball: honor it as a click regardless
+        // of a few px of drift on release (avoids jitter being read as a box-drag)
+        if (selected.size > 0){
+          for (const src of selected){
+            if (src !== boxDownBall) sendUnits(src, boxDownBall);
+          }
+        } else if (boxDownBall.owner === OWNER.PLAYER){
+          selected = new Set([boxDownBall]);
+        }
+      } else {
+        const moved = Math.hypot(x - boxStart.x, y - boxStart.y) > 6;
+        if (moved){
+          const rect = normalizeRect(boxStart, { x, y });
+          const hits = balls.filter(b => b.owner === OWNER.PLAYER && rectContains(rect, b));
+          selected = new Set(hits);
+        } else {
+          selected.clear();
+        }
+      }
+      boxActive = false;
+      boxStart = null;
+      boxEnd = null;
+      boxDownBall = null;
+    }
+  }
+
+  function updatePercentHUD(){
+    document.getElementById('percentIndicator').textContent = `Send: ${Math.round(sendPercent * 100)}%`;
+    for (const btn of document.querySelectorAll('#percentButtons button')){
+      btn.classList.toggle('active', parseFloat(btn.dataset.pct) === sendPercent);
+    }
+  }
+
+  for (const btn of document.querySelectorAll('#percentButtons button')){
+    btn.addEventListener('click', () => {
+      sendPercent = parseFloat(btn.dataset.pct);
+      updatePercentHUD();
+    });
+  }
+
+  window.addEventListener('keydown', e => {
+    if (e.key === '1') sendPercent = 0.25;
+    else if (e.key === '2') sendPercent = 0.5;
+    else if (e.key === '3') sendPercent = 0.75;
+    else if (e.key === '4') sendPercent = 1.0;
+    else if (e.key === 'Escape') selected.clear();
+    else return;
+    updatePercentHUD();
+  });
+
+  canvas.addEventListener('mousedown', e => pointerDown(e.clientX, e.clientY));
+  canvas.addEventListener('mousemove', e => pointerMove(e.clientX, e.clientY));
+  window.addEventListener('mouseup', e => pointerUp(e.clientX, e.clientY));
+
+  canvas.addEventListener('touchstart', e => {
+    const t = e.touches[0]; pointerDown(t.clientX, t.clientY); e.preventDefault();
+  }, { passive: false });
+  canvas.addEventListener('touchmove', e => {
+    const t = e.touches[0]; pointerMove(t.clientX, t.clientY); e.preventDefault();
+  }, { passive: false });
+  canvas.addEventListener('touchend', e => {
+    const t = e.changedTouches[0]; pointerUp(t.clientX, t.clientY); e.preventDefault();
+  }, { passive: false });
+
+  document.getElementById('restartBtn').addEventListener('click', () => {
+    level = 1;
+    stats = { strength: 0, growth: 0, speed: 0, defence: 0, regen: 0, magnet: 0, shield: 0, vision: 0 };
+    generateLevel();
+  });
+
+  generateLevel();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
